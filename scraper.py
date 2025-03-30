@@ -27,26 +27,40 @@ class EarthquakeScraper:
 
     def _parse_location(self, location_text):
         """Parse location text to separate Thai and English names."""
+        # Clean up the input text first
+        location_text = location_text.strip()
+        
         # Special handling: remove extra spaces between 'ต' and '.' to become 'ต.'
         location_text = re.sub(r'(ต)\s+\.', r'\1.', location_text)
         
-        # If a newline exists, split by newline
+        # First check for newlines (most reliable separator)
         if "\n" in location_text:
             parts = location_text.split('\n')
             thai_location = parts[0].strip() if len(parts) > 0 else ""
             english_location = parts[1].strip() if len(parts) > 1 else ""
-        else:
-            # Use regex to locate the first English letter as the transition point
-            match = re.search(r'[A-Za-z]', location_text)
-            if match:
-                split_index = match.start()
-                thai_location = location_text[:split_index].strip()
-                english_location = location_text[split_index:].strip()
-            else:
-                thai_location = location_text
-                english_location = ""
+            return thai_location, english_location
         
-        return thai_location, english_location
+        # Thai unicode range: \u0e00-\u0e7f
+        # Regular expression to find the transition point from Thai to English
+        # This looks for the last Thai character followed by a non-Thai character
+        match = re.search(r'[\u0e00-\u0e7f](?=\s*[^\u0e00-\u0e7f])', location_text)
+        if match:
+            # Split at the position after the last Thai character
+            split_index = match.end()
+            thai_location = location_text[:split_index].strip()
+            english_location = location_text[split_index:].strip()
+            return thai_location, english_location
+        
+        # Fallback to the original method - find first English letter
+        match = re.search(r'[A-Za-z]', location_text)
+        if match:
+            split_index = match.start()
+            thai_location = location_text[:split_index].strip()
+            english_location = location_text[split_index:].strip()
+            return thai_location, english_location
+        
+        # If no English characters found, assume all Thai
+        return location_text, ""
 
     def scrape_earthquake_data(self):
         """Scrape earthquake data from the TMD website."""
@@ -85,8 +99,31 @@ class EarthquakeScraper:
             
             # Extract date and time
             date_time_cell = cells[0]
-            date_time_text = date_time_cell.get_text(strip=True).split('\n')[0]
-            utc_time_text = date_time_cell.find('p', {'style': 'font-size:10px'}).get_text(strip=True)
+            date_time_text = date_time_cell.get_text(strip=True)
+            
+            # Split the date/time correctly - there might be two timestamps merged
+            # Look for patterns like YYYY-MM-DD HH:MM:SS
+            date_time_pattern = r'(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})'
+            date_matches = re.findall(date_time_pattern, date_time_text)
+            
+            if len(date_matches) >= 1:
+                # First match is local time
+                date_time_text = date_matches[0].strip()
+                
+                # If there's a second match with UTC, it's the UTC time
+                utc_time_text = ""
+                if len(date_matches) > 1 and "UTC" in date_time_text:
+                    utc_time_text = date_matches[1].strip() + " UTC"
+                else:
+                    # Try to find UTC time in a sub-element
+                    utc_p = date_time_cell.find('p', {'style': 'font-size:10px'})
+                    if utc_p:
+                        utc_time_text = utc_p.get_text(strip=True)
+            else:
+                # Fallback to the old method
+                date_time_text = date_time_cell.get_text(strip=True).split('\n')[0]
+                utc_p = date_time_cell.find('p', {'style': 'font-size:10px'})
+                utc_time_text = utc_p.get_text(strip=True) if utc_p else ""
             
             # Extract magnitude
             magnitude_cell = cells[1]
@@ -153,8 +190,25 @@ class EarthquakeScraper:
         if not self.last_event:
             return True
         
-        # Compare datetime strings
-        last_event_time = datetime.strptime(self.last_event['DateTime'], '%Y-%m-%d %H:%M:%S')
-        new_event_time = datetime.strptime(event['DateTime'], '%Y-%m-%d %H:%M:%S')
+        # Extract clean datetime strings for comparison
+        def clean_datetime_str(dt_str):
+            # Extract just the date and time portion (YYYY-MM-DD HH:MM:SS)
+            match = re.search(r'(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})', dt_str)
+            if match:
+                return match.group(1)
+            return dt_str  # Return original if no match
         
-        return new_event_time > last_event_time 
+        try:
+            # Clean and standardize the datetime strings
+            last_event_clean = clean_datetime_str(self.last_event['DateTime'])
+            new_event_clean = clean_datetime_str(event['DateTime'])
+            
+            # Parse the clean datetime strings
+            last_event_time = datetime.strptime(last_event_clean, '%Y-%m-%d %H:%M:%S')
+            new_event_time = datetime.strptime(new_event_clean, '%Y-%m-%d %H:%M:%S')
+            
+            return new_event_time > last_event_time
+        except Exception as e:
+            self.logger.warning(f"Date comparison error: {str(e)}")
+            # If there's any error in parsing, consider it a new event to be safe
+            return True 

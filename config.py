@@ -13,7 +13,7 @@ EARTHQUAKE_URL = "https://earthquake.tmd.go.th/inside.html"
 SCRAPING_INTERVAL = 300  # 5 minutes in seconds
 
 # Earthquake Filter Configuration
-MIN_MAGNITUDE = 1.0  # Minimum magnitude to trigger notification
+MIN_MAGNITUDE = 3.0  # Minimum magnitude to trigger notification
 
 # Logging Configuration
 LOG_FILE = "earthquake_bot.log"
